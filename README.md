@@ -1,4 +1,16 @@
 
+---
+title: Text-to-Speech-Web-App
+emoji: 🗣️
+colorFrom: blue
+colorTo: red
+sdk: docker
+app_port: 5000
+pinned: false
+---
+
+Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+
 # Text To Speech Generative AI
 
 This project is a Text-to-Speech (TTS) application using a generative AI. It allows users to convert entered text into audio, play it, and save it as an audio file. The application features a Graphical User Interface (GUI) built using tkinter in Python.

@@ -1,2 +1,4 @@
 pyttsx3==2.90      # Text-to-speech library
-streamlit==1.33.0  # Web framework
+flask==2.0.1       # Web framework
+werkzeug==2.0.1    # WSGI utilities
+gunicorn==20.1.0   # WSGI HTTP Server
