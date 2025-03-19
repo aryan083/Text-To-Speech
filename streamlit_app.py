@@ -76,7 +76,6 @@ with col2:
 def convert_and_play():
     engine = None
     try:
-        st.session_state.processing = True
         engine = TTSEngine.get_instance()
         if not text.strip():
             st.error('Please enter some text to convert')
@@ -94,7 +93,7 @@ def convert_and_play():
     finally:
         if engine:
             TTSEngine.cleanup(engine)
-        st.session_state.processing = False
+            st.session_state.processing = False
 
 # Audio file generation
 def generate_audio_file():
