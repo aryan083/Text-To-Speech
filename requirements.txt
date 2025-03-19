@@ -1,0 +1,2 @@
+pyttsx3==2.90      # Text-to-speech library
+streamlit==1.33.0  # Web framework
