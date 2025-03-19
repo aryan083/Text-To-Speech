@@ -1,196 +1,105 @@
 import streamlit as st
 import pyttsx3
-import base64
 import threading
-import time
 import logging
-import os
-from queue import Queue
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# TTS Engine Manager with enhanced error handling
+# Thread-safe TTS Engine Manager
 class TTSEngine:
     _lock = threading.Lock()
     _instance = None
-    _initialization_attempted = False
-
+    
     @classmethod
-    def get_instance(cls):
+    def get_engine(cls):
         with cls._lock:
-            if cls._instance is None and not cls._initialization_attempted:
+            if cls._instance is None:
                 try:
-                    logger.info("Initializing new TTS engine instance")
+                    logger.info("Initializing TTS engine")
                     cls._instance = pyttsx3.init()
-                    cls._initialization_attempted = True
                 except Exception as e:
-                    logger.error(f"TTS engine initialization failed: {str(e)}")
+                    logger.error(f"TTS initialization failed: {str(e)}")
+                    st.error("Speech engine initialization failed. Please try again.")
                     cls._instance = None
             return cls._instance
-
+    
     @classmethod
-    def cleanup(cls, engine):
+    def cleanup(cls):
         with cls._lock:
-            if engine and engine == cls._instance:
+            if cls._instance:
                 try:
-                    logger.info("Stopping TTS engine")
-                    engine.stop()
-                    del engine
-                    cls._instance = None
+                    logger.info("Cleaning up TTS engine")
+                    cls._instance.stop()
+                    del cls._instance
                 except Exception as e:
-                    logger.error(f"Error during engine cleanup: {str(e)}")
+                    logger.error(f"Cleanup error: {str(e)}")
+                finally:
+                    cls._instance = None
 
 # Streamlit app configuration
-st.set_page_config(page_title='Text to Speech Web App', layout='wide')
+st.set_page_config(page_title="Text to Speech", layout="wide")
 
-# Session state initialization
+# Initialize session state
 if 'processing' not in st.session_state:
     st.session_state.processing = False
-if 'temp_files' not in st.session_state:
-    st.session_state.temp_files = []
-if 'lock' not in st.session_state:
-    st.session_state.lock = threading.Lock()
 
-# Cleanup function for temporary files
-def cleanup_temp_files():
-    for file in st.session_state.temp_files:
-        try:
-            if os.path.exists(file):
-                os.remove(file)
-                logger.info(f"Cleaned up temporary file: {file}")
-        except Exception as e:
-            logger.error(f"Error cleaning up file {file}: {str(e)}")
-    st.session_state.temp_files = []
-
-# App layout
-st.title('Text to Speech Web App')
-
-# Text input
-text = st.text_area('Enter text to convert:', height=200)
-
-# Settings columns
-col1, col2 = st.columns(2)
-
-with col1:
-    speed = st.slider('Speech Speed', 50, 200, 100)
-    
-with col2:
-    voice_type = st.radio('Voice Type', ['Male', 'Female'])
-
-# Thread-safe audio conversion
-def convert_and_play():
-    engine = None
+def safe_convert():
+    """Thread-safe conversion function with proper Streamlit context"""
     try:
-        engine = TTSEngine.get_instance()
+        engine = TTSEngine.get_engine()
         if not engine:
-            raise RuntimeError("TTS engine initialization failed")
+            st.error("Speech engine not available")
+            return
             
+        text = st.session_state.text_input
         if not text.strip():
-            with st.session_state.lock:
-                st.error('Please enter some text to convert')
+            st.error("Please enter some text")
             return
-
-        engine.setProperty('rate', speed)
+            
+        engine.setProperty('rate', st.session_state.speed)
         voices = engine.getProperty('voices')
-        
-        if not voices:
-            with st.session_state.lock:
-                st.error('No voices available in the system')
-            return
-
-        engine.setProperty('voice', voices[0 if voice_type == 'Male' else 1].id)
+        voice_index = 0 if st.session_state.voice_type == 'Male' else 1
+        if len(voices) > voice_index:
+            engine.setProperty('voice', voices[voice_index].id)
+            
         engine.say(text)
         engine.runAndWait()
         
     except Exception as e:
-        with st.session_state.lock:
-            st.error(f'Speech generation error: {str(e)}')
+        logger.error(f"Conversion error: {str(e)}")
+        st.error(f"Conversion failed: {str(e)}")
     finally:
-        if engine:
-            TTSEngine.cleanup(engine)
-        with st.session_state.lock:
-            st.session_state.processing = False
+        TTSEngine.cleanup()
+        st.session_state.processing = False
 
-# Audio file generation with proper context
-def generate_audio_file():
-    engine = None
+# Main UI
+st.title("Text to Speech Converter")
+
+# Input controls
+st.text_area("Input Text", key="text_input", height=150)
+st.slider("Speech Speed", 50, 300, 175, key="speed")
+st.radio("Voice Type", ['Male', 'Female'], key="voice_type")
+
+# Conversion button
+if st.button("Convert to Speech", disabled=st.session_state.processing):
+    st.session_state.processing = True
     try:
-        with st.session_state.lock:
-            st.session_state.processing = True
-            
-        engine = TTSEngine.get_instance()
-        if not engine:
-            raise RuntimeError("TTS engine initialization failed")
-
-        if not text.strip():
-            with st.session_state.lock:
-                st.error('Please enter some text to convert')
-            return None
-
-        engine.setProperty('rate', speed)
-        voices = engine.getProperty('voices')
-        
-        if not voices:
-            with st.session_state.lock:
-                st.error('No voices available in the system')
-            return None
-
-        engine.setProperty('voice', voices[0 if voice_type == 'Male' else 1].id)
-        filename = f"tts_output_{int(time.time())}.wav"
-        
-        engine.save_to_file(text, filename)
-        engine.runAndWait()
-        
-        with st.session_state.lock:
-            st.session_state.temp_files.append(filename)
-            
-        return filename
-        
-    except Exception as e:
-        with st.session_state.lock:
-            st.error(f'Audio save failed: {str(e)}')
-        return None
-    finally:
-        if engine:
-            TTSEngine.cleanup(engine)
-        with st.session_state.lock:
-            st.session_state.processing = False
-
-# Button columns with proper thread handling
-btn_col1, btn_col2, _ = st.columns([1,1,2])
-
-with btn_col1:
-    if st.button('Convert & Play', disabled=st.session_state.processing):
-        thread = threading.Thread(target=convert_and_play, daemon=True)
+        # Create and start thread with proper context
+        thread = threading.Thread(target=safe_convert)
         add_script_run_ctx(thread)
         thread.start()
-
-with btn_col2:
-    if st.button('Save as Audio', disabled=st.session_state.processing):
-        audio_file = generate_audio_file()
-        if audio_file:
-            with open(audio_file, "rb") as f:
-                bytes = f.read()
-                st.download_button(
-                    label="Download Audio",
-                    data=bytes,
-                    file_name=audio_file,
-                    mime="audio/wav",
-                    on_click=lambda: cleanup_temp_files()
-                )
+    except Exception as e:
+        st.error(f"Failed to start conversion: {str(e)}")
+        st.session_state.processing = False
 
 # Status indicator
 if st.session_state.processing:
-    st.warning('Audio processing in progress...')
+    st.warning("Processing... (This may take a moment)")
 else:
-    st.success('Ready for new conversion')
+    st.success("Ready for input")
 
-# Cleanup on session end
-def on_close():
-    TTSEngine.cleanup()
-    cleanup_temp_files()
-
-st.session_state.on_close = on_close
+# Cleanup on app exit
+TTSEngine.cleanup()
