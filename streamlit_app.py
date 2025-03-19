@@ -1,160 +1,183 @@
 import streamlit as st
 import pyttsx3
-import base64
+import os
+import logging
 import threading
 import time
-import logging
-import os
-from queue import Queue
+from tempfile import NamedTemporaryFile
+from typing import Optional
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# TTS Engine Manager
-class TTSEngine:
+class TTSEngineManager:
+    """Thread-safe TTS engine manager with resource cleanup"""
     _lock = threading.Lock()
-    _instance = None
-
-    @classmethod
-    def get_instance(cls):
-        with cls._lock:
-            if cls._instance is None:
-                logging.info("Initializing new TTS engine instance")
-                cls._instance = pyttsx3.init()
-            return cls._instance
-
-    @classmethod
-    def cleanup(cls, engine):
-        with cls._lock:
-            if engine:
-                try:
-                    logging.info("Stopping TTS engine")
-                    engine.stop()
-                    if engine == cls._instance:
-                        cls._instance = None
-                        logging.info("TTS engine instance cleared")
-                except Exception as e:
-                    logging.error(f"Error during engine cleanup: {str(e)}")
-                    pass
-
-# Streamlit app configuration
-st.set_page_config(page_title='Text to Speech Web App', layout='wide')
-
-# Session state initialization
-if 'processing' not in st.session_state:
-    st.session_state.processing = False
-if 'temp_files' not in st.session_state:
-    st.session_state.temp_files = []
-
-# Cleanup function for temporary files
-def cleanup_temp_files():
-    for file in st.session_state.temp_files:
-        try:
-            if os.path.exists(file):
-                os.remove(file)
-                logging.info(f"Cleaned up temporary file: {file}")
-        except Exception as e:
-            logging.error(f"Error cleaning up file {file}: {str(e)}")
-    st.session_state.temp_files = []
-
-# App layout
-st.title('Text to Speech Web App')
-
-# Text input
-text = st.text_area('Enter text to convert:', height=200)
-
-# Settings columns
-col1, col2 = st.columns(2)
-
-with col1:
-    speed = st.slider('Speech Speed', 50, 200, 100)
+    _engine: Optional[pyttsx3.Engine] = None
     
-with col2:
-    voice_type = st.radio('Voice Type', ['Male', 'Female'])
+    @classmethod
+    def get_engine(cls) -> pyttsx3.Engine:
+        with cls._lock:
+            if cls._engine is None:
+                logger.info("Initializing new TTS engine")
+                try:
+                    cls._engine = pyttsx3.init()
+                    # Configure default settings
+                    cls._engine.setProperty('rate', 150)
+                except Exception as e:
+                    logger.error(f"Failed to initialize TTS engine: {str(e)}")
+                    raise RuntimeError("Could not initialize TTS engine") from e
+            return cls._engine
+    
+    @classmethod
+    def shutdown(cls):
+        with cls._lock:
+            if cls._engine is not None:
+                try:
+                    logger.info("Shutting down TTS engine")
+                    cls._engine.stop()
+                    del cls._engine
+                except Exception as e:
+                    logger.error(f"Error during engine shutdown: {str(e)}")
+                finally:
+                    cls._engine = None
 
-# Audio controls
-def convert_and_play():
-    engine = None
-    try:
-        engine = TTSEngine.get_instance()
-        if not text.strip():
-            st.error('Please enter some text to convert')
-            return
-        engine.setProperty('rate', speed)
-        voices = engine.getProperty('voices')
-        if not voices:
-            st.error('No voices available in the system')
-            return
-        engine.setProperty('voice', voices[0 if voice_type == 'Male' else 1].id)
-        engine.say(text)
-        engine.runAndWait()
-    except Exception as e:
-        st.error(f'Speech generation error: {str(e)}')
-    finally:
-        if engine:
-            TTSEngine.cleanup(engine)
-            st.session_state.processing = False
+def configure_page():
+    """Configure Streamlit page settings"""
+    st.set_page_config(
+        page_title='Text to Speech Converter',
+        page_icon="🔊",
+        layout="centered",
+        initial_sidebar_state="expanded"
+    )
+    st.title("Text to Speech Converter")
+    st.markdown("---")
 
-# Audio file generation
-def generate_audio_file():
-    engine = None
-    try:
-        st.session_state.processing = True
-        logging.info("Starting audio file generation")
-        engine = TTSEngine.get_instance()
-        if not text.strip():
-            st.error('Please enter some text to convert')
-            return None
-        logging.info(f"Configuring TTS engine with speed {speed} and voice type {voice_type}")
-        engine.setProperty('rate', speed)
-        voices = engine.getProperty('voices')
-        if not voices:
-            st.error('No voices available in the system')
-            return None
-        engine.setProperty('voice', voices[0 if voice_type == 'Male' else 1].id)
-        filename = f"tts_output_{int(time.time())}.wav"
-        logging.info(f"Saving audio to file: {filename}")
-        engine.save_to_file(text, filename)
-        engine.runAndWait()
-        st.session_state.temp_files.append(filename)
-        logging.info("Audio file generation completed successfully")
-        return filename
-    except Exception as e:
-        logging.error(f"Audio generation failed: {str(e)}")
-        st.error(f'Audio save failed: {str(e)}')
-        return None
-    finally:
-        if engine:
-            TTSEngine.cleanup(engine)
+def initialize_state():
+    """Initialize session state variables"""
+    if 'processing' not in st.session_state:
         st.session_state.processing = False
+    if 'audio_file' not in st.session_state:
+        st.session_state.audio_file = None
 
-# Button columns
-btn_col1, btn_col2, _ = st.columns([1,1,2])
+def get_voice_settings(engine: pyttsx3.Engine) -> tuple:
+    """Get available voices and validate selection"""
+    voices = engine.getProperty('voices')
+    if not voices:
+        raise RuntimeError("No TTS voices available on the system")
+    
+    voice_labels = ['Default']
+    if len(voices) > 1:
+        voice_labels.extend(['Male', 'Female'] if len(voices) >= 2 else ['Alternative'])
+    
+    selected_voice = st.radio("Voice Type", voice_labels)
+    return voices[0 if selected_voice == 'Default' else 1]
 
-with btn_col1:
-    if st.button('Convert & Play', disabled=st.session_state.processing):
-        threading.Thread(target=convert_and_play, daemon=True).start()
+def generate_audio(text: str, speed: int, voice) -> Optional[str]:
+    """Generate audio file from text with error handling"""
+    engine = TTSEngineManager.get_engine()
+    try:
+        engine.setProperty('rate', speed)
+        engine.setProperty('voice', voice.id)
+        
+        with NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
+            temp_path = tmpfile.name
+            engine.save_to_file(text, temp_path)
+            engine.runAndWait()
+            
+        logger.info(f"Generated audio file: {temp_path}")
+        return temp_path
+        
+    except Exception as e:
+        logger.error(f"Audio generation failed: {str(e)}")
+        st.error(f"Failed to generate audio: {str(e)}")
+        return None
 
-with btn_col2:
-    if st.button('Save as Audio', disabled=st.session_state.processing):
-        audio_file = generate_audio_file()
-        if audio_file:
-            with open(audio_file, "rb") as f:
-                bytes = f.read()
-                st.download_button(
-                    label="Download Audio",
-                    data=bytes,
-                    file_name=audio_file,
-                    mime="audio/wav",
-                    on_click=lambda: cleanup_temp_files()
-                )
+def cleanup_resources():
+    """Cleanup temporary files and engine resources"""
+    if st.session_state.audio_file and os.path.exists(st.session_state.audio_file):
+        try:
+            os.remove(st.session_state.audio_file)
+            logger.info(f"Removed temporary file: {st.session_state.audio_file}")
+        except Exception as e:
+            logger.error(f"Error removing temp file: {str(e)}")
+    TTSEngineManager.shutdown()
 
-# Status indicator
-if st.session_state.processing:
-    st.warning('Audio processing in progress...')
-else:
-    st.success('Ready for new conversion')
+def main_interface():
+    """Main application interface"""
+    text_input = st.text_area(
+        "Enter text to convert:",
+        height=200,
+        placeholder="Type or paste your text here..."
+    )
+    
+    speed_setting = st.slider(
+        "Speech Speed (words per minute)",
+        min_value=50,
+        max_value=300,
+        value=175,
+        step=25
+    )
+    
+    try:
+        engine = TTSEngineManager.get_engine()
+        selected_voice = get_voice_settings(engine)
+    except RuntimeError as e:
+        st.error(str(e))
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Preview Speech", disabled=st.session_state.processing):
+            if not text_input.strip():
+                st.warning("Please enter some text to convert")
+                return
+            
+            st.session_state.processing = True
+            try:
+                engine.say(text_input)
+                engine.runAndWait()
+            except Exception as e:
+                st.error(f"Speech preview failed: {str(e)}")
+            finally:
+                st.session_state.processing = False
+    
+    with col2:
+        if st.button("Generate Audio File", disabled=st.session_state.processing):
+            if not text_input.strip():
+                st.warning("Please enter some text to convert")
+                return
+            
+            st.session_state.processing = True
+            try:
+                audio_path = generate_audio(text_input, speed_setting, selected_voice)
+                if audio_path:
+                    st.session_state.audio_file = audio_path
+                    st.success("Audio file generated successfully!")
+            finally:
+                st.session_state.processing = False
 
-# Cleanup on session end and refresh
-st.session_state.on_close = TTSEngine.cleanup
-cleanup_temp_files()
+    if st.session_state.audio_file and os.path.exists(st.session_state.audio_file):
+        st.markdown("---")
+        st.subheader("Download Audio")
+        with open(st.session_state.audio_file, "rb") as f:
+            st.download_button(
+                label="Download WAV File",
+                data=f,
+                file_name="generated_speech.wav",
+                mime="audio/wav"
+            )
+
+def main():
+    configure_page()
+    initialize_state()
+    
+    try:
+        main_interface()
+    finally:
+        cleanup_resources()
+
+if __name__ == "__main__":
+    main()
