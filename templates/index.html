@@ -171,12 +171,16 @@
                     throw new Error('Conversion failed');
                 }
 
+                if (response.status === 500) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Server error occurred');
+                }
                 const blob = await response.blob();
                 if (download) {
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = 'speech.wav';
+                    a.download = 'speech.mp3';
                     document.body.appendChild(a);
                     a.click();
                     window.URL.revokeObjectURL(url);
@@ -191,7 +195,7 @@
                 }
                 status.className = 'success';
             } catch (error) {
-                status.textContent = 'Error: ' + error.message;
+                status.textContent = 'Error: ' + (error.message || 'Failed to convert text to speech. Please try again.');
                 status.className = 'error';
             }
         }

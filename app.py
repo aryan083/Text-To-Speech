@@ -1,7 +1,8 @@
 from flask import Flask, render_template, request, send_file, jsonify
-import pyttsx3
+from gtts import gTTS
 import os
 import tempfile
+import uuid
 
 app = Flask(__name__)
 
@@ -20,23 +21,19 @@ def convert_text():
         if not text.strip():
             return jsonify({'error': 'Please enter some text'}), 400
 
-        # Initialize text-to-speech engine
-        engine = pyttsx3.init()
-        voices = engine.getProperty('voices')
-        engine.setProperty('voice', voices[voice_type].id)
-        engine.setProperty('rate', speed)
-
-        # Create temporary file for audio
+        # Create a unique filename
         temp_dir = tempfile.gettempdir()
-        temp_file = os.path.join(temp_dir, 'output.wav')
+        temp_file = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp3')
 
-        # Generate audio file
-        engine.save_to_file(text, temp_file)
-        engine.runAndWait()
+        # Initialize text-to-speech with gTTS
+        tts = gTTS(text=text, lang='en', slow=(speed < 100))
+        
+        # Save the audio file
+        tts.save(temp_file)
 
         return send_file(
             temp_file,
-            mimetype='audio/wav',
+            mimetype='audio/mp3',
             as_attachment=True,
             download_name='speech.wav'
         )
