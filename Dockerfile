@@ -1,6 +1,6 @@
 FROM python:3.11
 
-# Install espeak library and verify
+# Install espeak dependency
 RUN apt-get update && apt-get install -y espeak \
     && ldconfig -p | grep espeak
 
