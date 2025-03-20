@@ -6,12 +6,16 @@ import io
 import time
 import logging
 from requests.exceptions import RequestException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 
+# Configure for running behind a proxy
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -83,7 +87,7 @@ def convert_text():
         return jsonify({'error': f'Invalid parameter values: {str(e)}'}), 400
     except (gTTSError, RequestException) as e:
         logger.error(f'Network or TTS service error: {str(e)}, Error type: {type(e).__name__}')
-        if temp_file and os.path.exists(temp_file):
+        if 'temp_file' in locals() and temp_file and os.path.exists(temp_file):
             try:
                 logger.debug('Attempting to clean up temporary file after error')
                 os.remove(temp_file)
@@ -93,7 +97,7 @@ def convert_text():
         return jsonify({'error': f'Network error occurred during text-to-speech conversion: {str(e)}. Please try again.'}), 503
     except Exception as e:
         logger.error(f'Unexpected error during text-to-speech conversion: {str(e)}, Error type: {type(e).__name__}')
-        if temp_file and os.path.exists(temp_file):
+        if 'temp_file' in locals() and temp_file and os.path.exists(temp_file):
             try:
                 logger.debug('Attempting to clean up temporary file after error')
                 os.remove(temp_file)
