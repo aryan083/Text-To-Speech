@@ -35,25 +35,42 @@ def convert_text():
         # Save the audio file
         tts.save(temp_file)
 
-        return send_file(
-            temp_file,
-            mimetype='audio/mpeg',  # Correct MIME type for MP3
-            as_attachment=True,
-            download_name='speech.mp3'  # Consistent file extension
+        # Verify the file was created successfully
+        if not os.path.exists(temp_file):
+            raise Exception('Failed to create audio file')
+
+        # Get file size to set Content-Length header
+        file_size = os.path.getsize(temp_file)
+
+        def generate():
+            with open(temp_file, 'rb') as f:
+                data = f.read(8192)
+                while data:
+                    yield data
+                    data = f.read(8192)
+            # Clean up the file after sending
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+        response = app.response_class(
+            generate(),
+            mimetype='audio/mpeg'
         )
+        response.headers['Content-Length'] = file_size
+        response.headers['Content-Disposition'] = 'attachment; filename=speech.mp3'
+        return response
 
     except ValueError as e:
+        app.logger.error(f'Parameter validation error: {str(e)}')
         return jsonify({'error': 'Invalid parameter values'}), 400
     except Exception as e:
         app.logger.error(f'Text-to-speech conversion error: {str(e)}')
-        return jsonify({'error': 'Failed to convert text to speech'}), 500
-    finally:
-        # Clean up the temporary file
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
-            except Exception as e:
-                app.logger.error(f'Failed to remove temporary file: {str(e)}')
+            except Exception as cleanup_error:
+                app.logger.error(f'Failed to remove temporary file: {str(cleanup_error)}')
+        return jsonify({'error': 'Failed to convert text to speech'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
