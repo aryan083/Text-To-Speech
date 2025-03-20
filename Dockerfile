@@ -1,7 +1,8 @@
 FROM python:3.11
 
-# Install espeak library
-RUN apt-get update && apt-get install -y espeak
+# Install espeak library and verify
+RUN apt-get update && apt-get install -y espeak \
+    && ldconfig -p | grep espeak
 
 # Set the working directory
 WORKDIR /app
