@@ -1,9 +1,8 @@
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, Response
 from gtts import gTTS
 from gtts.tts import gTTSError
 import os
-import tempfile
-import uuid
+import io
 import time
 import logging
 from requests.exceptions import RequestException
@@ -23,7 +22,6 @@ def index():
 
 @app.route('/convert', methods=['POST'])
 def convert_text():
-    temp_file = None
     try:
         logger.info('Starting text-to-speech conversion request')
         data = request.get_json()
@@ -41,23 +39,23 @@ def convert_text():
             logger.warning('Empty text received')
             return jsonify({'error': 'Please enter some text'}), 400
 
-        # Create a unique filename
-        temp_dir = tempfile.gettempdir()
-        temp_file = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp3')
-        logger.debug(f'Created temporary file: {temp_file}')
-
         # Initialize text-to-speech with gTTS with retries
         max_retries = 3
         retry_delay = 1  # seconds
         logger.info('Starting text-to-speech conversion with retries')
         
+        audio_data = None
         for attempt in range(max_retries):
             try:
                 logger.info(f'Attempt {attempt + 1}/{max_retries} to convert text to speech')
                 tts = gTTS(text=text, lang='en', slow=(speed < 100))
                 logger.debug('gTTS object created successfully')
-                tts.save(temp_file)
-                logger.info('Audio file saved successfully')
+                
+                # Use BytesIO instead of temporary file
+                audio_io = io.BytesIO()
+                tts.write_to_fp(audio_io)
+                audio_data = audio_io.getvalue()
+                logger.info('Audio data generated successfully in memory')
                 break
             except (gTTSError, RequestException) as e:
                 logger.error(f'TTS attempt {attempt + 1} failed: {str(e)}, Error type: {type(e).__name__}')
@@ -67,38 +65,16 @@ def convert_text():
                 logger.info(f'Waiting {retry_delay} seconds before retry')
                 time.sleep(retry_delay)
 
-        # Verify the file was created successfully
-        if not os.path.exists(temp_file):
-            logger.error('Audio file not found after conversion')
-            raise Exception('Failed to create audio file')
+        if not audio_data:
+            logger.error('Audio data not generated')
+            raise Exception('Failed to generate audio data')
 
-        # Get file size to set Content-Length header
-        file_size = os.path.getsize(temp_file)
-        logger.debug(f'Audio file size: {file_size} bytes')
-
-        def generate():
-            try:
-                logger.info('Starting audio file streaming')
-                with open(temp_file, 'rb') as f:
-                    data = f.read(8192)
-                    while data:
-                        yield data
-                        data = f.read(8192)
-                logger.info('Audio file streaming completed')
-                # Clean up the file after sending
-                if os.path.exists(temp_file):
-                    logger.debug('Cleaning up temporary audio file')
-                    os.remove(temp_file)
-                    logger.info('Temporary audio file removed successfully')
-            except Exception as e:
-                logger.error(f'Error during file streaming: {str(e)}')
-                raise
-
-        response = app.response_class(
-            generate(),
+        # Create response with in-memory audio data
+        response = Response(
+            audio_data,
             mimetype='audio/mpeg'
         )
-        response.headers['Content-Length'] = file_size
+        response.headers['Content-Length'] = len(audio_data)
         response.headers['Content-Disposition'] = 'attachment; filename=speech.mp3'
         return response
 
