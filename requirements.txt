@@ -8,4 +8,4 @@ pyttsx3==2.90
 
 # Comment out or adjust version on problematic entries
 # espeak==1.48-7
-espeak-ng==1.50
+#espeak-ng==1.50
