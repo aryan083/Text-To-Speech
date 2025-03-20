@@ -1,8 +1,11 @@
 from flask import Flask, render_template, request, send_file, jsonify
 from gtts import gTTS
+from gtts.tts import gTTSError
 import os
 import tempfile
 import uuid
+import time
+from requests.exceptions import RequestException
 
 app = Flask(__name__)
 
@@ -29,11 +32,20 @@ def convert_text():
         temp_dir = tempfile.gettempdir()
         temp_file = os.path.join(temp_dir, f'output_{uuid.uuid4()}.mp3')
 
-        # Initialize text-to-speech with gTTS
-        tts = gTTS(text=text, lang='en', slow=(speed < 100))
+        # Initialize text-to-speech with gTTS with retries
+        max_retries = 3
+        retry_delay = 1  # seconds
         
-        # Save the audio file
-        tts.save(temp_file)
+        for attempt in range(max_retries):
+            try:
+                tts = gTTS(text=text, lang='en', slow=(speed < 100))
+                tts.save(temp_file)
+                break
+            except (gTTSError, RequestException) as e:
+                app.logger.error(f'TTS attempt {attempt + 1} failed: {str(e)}')
+                if attempt == max_retries - 1:
+                    raise Exception(f'Failed to convert text after {max_retries} attempts: {str(e)}')
+                time.sleep(retry_delay)
 
         # Verify the file was created successfully
         if not os.path.exists(temp_file):
@@ -63,6 +75,14 @@ def convert_text():
     except ValueError as e:
         app.logger.error(f'Parameter validation error: {str(e)}')
         return jsonify({'error': 'Invalid parameter values'}), 400
+    except (gTTSError, RequestException) as e:
+        app.logger.error(f'Network or TTS service error: {str(e)}')
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception as cleanup_error:
+                app.logger.error(f'Failed to remove temporary file: {str(cleanup_error)}')
+        return jsonify({'error': 'Network error occurred during text-to-speech conversion. Please try again.'}), 503
     except Exception as e:
         app.logger.error(f'Text-to-speech conversion error: {str(e)}')
         if temp_file and os.path.exists(temp_file):
