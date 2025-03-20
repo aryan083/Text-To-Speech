@@ -1,0 +1,7 @@
+{
+    "name": "text-to-speech-app",
+    "type": "web",
+    "env": "python3",
+    "run": "gunicorn app:app",
+    "requirements": "requirements.txt"
+}
